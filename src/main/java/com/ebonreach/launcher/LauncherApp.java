@@ -7,16 +7,25 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.*;
+import javafx.scene.paint.Color;
+import javafx.scene.paint.CycleMethod;
+import javafx.scene.paint.LinearGradient;
+import javafx.scene.paint.Stop;
 import javafx.scene.text.Font;
 import javafx.stage.Stage;
 
 import java.io.File;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
 public class LauncherApp extends Application {
+
+    private static final int W = 800, H = 450;
 
     private final Config config = Config.load();
     private final Label status = new Label("Ready.");
@@ -28,28 +37,63 @@ public class LauncherApp extends Application {
 
     @Override
     public void start(Stage stage) {
-        Label title = new Label("EbonReach");
-        title.setFont(Font.font("Georgia", 32));
-        title.setStyle("-fx-text-fill: #d8d0e8;");
+        StackPane root = new StackPane();
 
-        status.setStyle("-fx-text-fill: #b8b0c8;");
-        detail.setStyle("-fx-text-fill: #7a7488; -fx-font-size: 11px;");
+        InputStream bg = getClass().getResourceAsStream("/background.png");
+        if (bg != null) {
+            Image img = new Image(bg);
+            ImageView iv = new ImageView(img);
+            double keep = 0.66;
+            iv.setViewport(new javafx.geometry.Rectangle2D(
+                    0, 0, img.getWidth(), img.getHeight() * keep));
+            iv.setFitWidth(W);
+            iv.setFitHeight(H);
+            iv.setPreserveRatio(false);
+            root.getChildren().add(iv);
+        } else {
+            root.setStyle("-fx-background-color: #1a1620;");
+        }
 
-        bar.setPrefWidth(460);
-        bar.setStyle("-fx-accent: #8a6fb0;");
 
-        action.setPrefWidth(160);
-        action.setStyle("-fx-background-color: #4a3d5c; -fx-text-fill: #e8e0f0;"
-                      + "-fx-font-size: 14px; -fx-padding: 8 20 8 20;");
+        Region scrim = new Region();
+        scrim.setBackground(new Background(new BackgroundFill(
+                new LinearGradient(0, 0, 0, 1, true, CycleMethod.NO_CYCLE,
+                        new Stop(0.0, Color.rgb(8, 6, 12, 0.10)),
+                        new Stop(0.55, Color.rgb(8, 6, 12, 0.45)),
+                        new Stop(1.0, Color.rgb(8, 6, 12, 0.97))),
+                null, null)));
+        root.getChildren().add(scrim);
+
+        status.setStyle("-fx-text-fill: #ddd4ea; -fx-font-size: 14px;");
+        detail.setStyle("-fx-text-fill: #9d94ad; -fx-font-size: 11px;");
+
+        bar.setPrefWidth(520);
+        bar.setStyle("-fx-accent: #9b7fc4;");
+
+        action.setPrefWidth(180);
+        action.setStyle("-fx-background-color: rgba(74,61,92,0.92);"
+                      + "-fx-text-fill: #ece5f5; -fx-font-size: 15px;"
+                      + "-fx-padding: 10 24 10 24; -fx-background-radius: 3;"
+                      + "-fx-border-color: rgba(155,127,196,0.5); -fx-border-radius: 3;");
         action.setOnAction(e -> onAction(stage));
 
-        VBox root = new VBox(14, title, status, bar, detail, action);
-        root.setAlignment(Pos.CENTER);
-        root.setPadding(new Insets(36));
-        root.setStyle("-fx-background-color: #1a1620;");
+        Label brand = new Label("EbonReach");
+        brand.setFont(Font.font("Georgia", 40));
+        brand.setStyle("-fx-text-fill: #e6dcf2;"
+                     + "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.9), 14, 0.4, 0, 2);");
+        StackPane.setAlignment(brand, Pos.TOP_CENTER);
+        StackPane.setMargin(brand, new Insets(26, 0, 0, 0));
+        root.getChildren().add(brand);
 
-        stage.setScene(new Scene(root, 540, 300));
-        stage.setTitle("EbonReach Launcher");
+        VBox controls = new VBox(12, status, bar, detail, action);
+        controls.setAlignment(Pos.BOTTOM_CENTER);
+        controls.setPadding(new Insets(0, 0, 28, 0));
+        controls.setMaxHeight(Region.USE_PREF_SIZE);
+        StackPane.setAlignment(controls, Pos.BOTTOM_CENTER);
+        root.getChildren().add(controls);
+
+        stage.setScene(new Scene(root, W, H));
+        stage.setTitle("EbonReach");
         stage.setResizable(false);
         stage.show();
 
@@ -170,3 +214,7 @@ public class LauncherApp extends Application {
 
     public static void main(String[] args) { launch(args); }
 }
+
+
+
+
