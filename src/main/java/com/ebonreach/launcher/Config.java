@@ -1,0 +1,42 @@
+package com.ebonreach.launcher;
+
+import java.io.*;
+import java.nio.file.*;
+import java.util.Properties;
+
+public class Config {
+    private static final Path FILE = Path.of("launcher.properties");
+
+    public String serverUrl  = "http://143.47.241.168:8080/";
+    public String installDir = "client";
+
+    public static Config load() {
+        Config c = new Config();
+        if (Files.exists(FILE)) {
+            Properties p = new Properties();
+            try (InputStream in = Files.newInputStream(FILE)) {
+                p.load(in);
+                c.serverUrl  = p.getProperty("serverUrl", c.serverUrl);
+                c.installDir = p.getProperty("installDir", c.installDir);
+            } catch (IOException e) {
+                System.err.println("config read failed, using defaults: " + e.getMessage());
+            }
+        }
+        return c;
+    }
+
+    public void save() {
+        Properties p = new Properties();
+        p.setProperty("serverUrl", serverUrl);
+        p.setProperty("installDir", installDir);
+        try (OutputStream out = Files.newOutputStream(FILE)) {
+            p.store(out, "EbonReach Launcher");
+        } catch (IOException e) {
+            System.err.println("config write failed: " + e.getMessage());
+        }
+    }
+
+    public Path installPath() {
+        return Path.of(installDir).toAbsolutePath();
+    }
+}
