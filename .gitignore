@@ -31,3 +31,4 @@ dependency-reduced-pom.xml
 testclient/
 client/
 launcher.properties
+dist/
