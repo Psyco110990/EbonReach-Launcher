@@ -12,8 +12,16 @@ import java.nio.file.*;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class Patcher {
+
+    /** How many files to download at once. */
+    private static final int WORKERS = 8;
 
     public record FileEntry(String path, long size, String md5) {}
 
@@ -59,45 +67,76 @@ public class Patcher {
         return need;
     }
 
+    /**
+     * Downloads every entry, several at a time.
+     *
+     * Sequential downloading spends one full round trip per file before any
+     * bytes arrive, which dominates the run when most files are small. Running
+     * WORKERS at once overlaps that waiting.
+     *
+     * Progress callbacks arrive from multiple threads, so the caller must be
+     * safe to call concurrently (LauncherApp is: it uses Platform.runLater).
+     */
     public void download(List<FileEntry> files, Progress p) throws Exception {
         long total = files.stream().mapToLong(FileEntry::size).sum();
-        long done = 0;
-        int i = 0;
-        for (FileEntry e : files) {
-            i++;
-            if (p != null) p.onFile(e.path(), i, files.size());
+        AtomicLong done = new AtomicLong();
+        AtomicInteger index = new AtomicInteger();
+        int count = files.size();
 
-            Path target = installDir.resolve(e.path());
-            Files.createDirectories(target.getParent());
-            Path tmp = target.resolveSibling(target.getFileName() + ".part");
+        ExecutorService pool = Executors.newFixedThreadPool(WORKERS);
+        List<Future<?>> futures = new ArrayList<>();
 
-            HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + e.path().replace(" ", "%20")))
-                    .GET().build();
-            HttpResponse<InputStream> res =
-                    http.send(req, HttpResponse.BodyHandlers.ofInputStream());
-            if (res.statusCode() != 200)
-                throw new IllegalStateException("download failed " + e.path()
-                        + ": HTTP " + res.statusCode());
-
-            try (InputStream in = res.body();
-                 var out = Files.newOutputStream(tmp)) {
-                byte[] buf = new byte[65536];
-                int r;
-                while ((r = in.read(buf)) > 0) {
-                    out.write(buf, 0, r);
-                    done += r;
-                    if (p != null) p.onBytes(done, total);
-                }
+        try {
+            for (FileEntry e : files) {
+                futures.add(pool.submit(() -> {
+                    int i = index.incrementAndGet();
+                    if (p != null) p.onFile(e.path(), i, count);
+                    fetchOne(e, done, total, p);
+                    return null;
+                }));
             }
+            pool.shutdown();
 
-            String got = md5(tmp);
-            if (!got.equalsIgnoreCase(e.md5())) {
-                Files.deleteIfExists(tmp);
-                throw new IllegalStateException("checksum mismatch on " + e.path());
-            }
-            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+            // get() rethrows the first failure, wrapped in ExecutionException.
+            for (Future<?> f : futures) f.get();
+        } finally {
+            pool.shutdownNow();
         }
+    }
+
+    /** Fetches one file to a .part, verifies its checksum, then renames it. */
+    private void fetchOne(FileEntry e, AtomicLong done, long total, Progress p)
+            throws Exception {
+        Path target = installDir.resolve(e.path());
+        Files.createDirectories(target.getParent());
+        Path tmp = target.resolveSibling(target.getFileName() + ".part");
+
+        HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + e.path().replace(" ", "%20")))
+                .GET().build();
+        HttpResponse<InputStream> res =
+                http.send(req, HttpResponse.BodyHandlers.ofInputStream());
+        if (res.statusCode() != 200)
+            throw new IllegalStateException("download failed " + e.path()
+                    + ": HTTP " + res.statusCode());
+
+        try (InputStream in = res.body();
+             var out = Files.newOutputStream(tmp)) {
+            byte[] buf = new byte[65536];
+            int r;
+            while ((r = in.read(buf)) > 0) {
+                out.write(buf, 0, r);
+                long d = done.addAndGet(r);
+                if (p != null) p.onBytes(d, total);
+            }
+        }
+
+        String got = md5(tmp);
+        if (!got.equalsIgnoreCase(e.md5())) {
+            Files.deleteIfExists(tmp);
+            throw new IllegalStateException("checksum mismatch on " + e.path());
+        }
+        Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
     }
 
     public static String md5(Path file) throws Exception {
