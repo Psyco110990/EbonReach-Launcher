@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public class Patcher {
 
     /** How many files to download at once. */
-    private static final int WORKERS = 8;
+    private static final int WORKERS = 16;
 
     /** Cache of verified hashes, written into the install directory. */
     private static final String STATE_FILE = ".ebonreach-state.json";
