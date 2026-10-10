@@ -22,6 +22,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class LauncherApp extends Application {
 
@@ -34,6 +35,9 @@ public class LauncherApp extends Application {
     private final Button action = new Button("Check for updates");
 
     private List<Patcher.FileEntry> pending = null;
+
+    /** Number of game clients this launcher has started that are still alive. */
+    private final AtomicInteger running = new AtomicInteger(0);
 
     @Override
     public void start(Stage stage) {
@@ -127,7 +131,7 @@ public class LauncherApp extends Application {
                 status.setText("Up to date.");
                 detail.setText(config.installPath().toString());
                 bar.setProgress(1);
-                action.setText("Play");
+                updateActionLabel();
             } else {
                 long bytes = pending.stream().mapToLong(Patcher.FileEntry::size).sum();
                 status.setText(pending.size() + " file(s) to update");
@@ -195,14 +199,37 @@ public class LauncherApp extends Application {
             return;
         }
         try {
-            new ProcessBuilder(exe.toString())
+            Process proc = new ProcessBuilder(exe.toString())
                 .directory(new File(config.installPath().toString()))
                 .start();
-            Platform.exit();
+
+            running.incrementAndGet();
+            status.setText("Game launched.");
+            updateActionLabel();
+            updateRunningDetail();
+
+            // Keep the launcher open. When a client exits, drop the count.
+            proc.onExit().thenRun(() -> Platform.runLater(() -> {
+                running.decrementAndGet();
+                updateActionLabel();
+                updateRunningDetail();
+            }));
         } catch (Exception ex) {
             status.setText("Could not start the game.");
             detail.setText(ex.getMessage());
         }
+    }
+
+    private void updateActionLabel() {
+        int n = running.get();
+        action.setText(n == 0 ? "Play" : "Play (" + n + " running)");
+    }
+
+    private void updateRunningDetail() {
+        int n = running.get();
+        detail.setText(n == 0
+                ? config.installPath().toString()
+                : n + (n == 1 ? " client running" : " clients running"));
     }
 
     private static String human(long b) {
