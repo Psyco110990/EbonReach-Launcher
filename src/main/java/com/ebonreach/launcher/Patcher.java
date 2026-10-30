@@ -31,10 +31,14 @@ public class Patcher {
     /** Cache of verified hashes, written into the install directory. */
     private static final String STATE_FILE = ".ebonreach-state.json";
 
-    public record FileEntry(String path, long size, String md5) {}
+    /**
+     * One file from the manifest. {@code algo} is "SHA-256" when the manifest
+     * carries a sha256 field, otherwise "MD5" (manifests from before Oct 2026).
+     */
+    public record FileEntry(String path, long size, String algo, String hash) {}
 
     /** What we last verified about a local file: its size, mtime and hash. */
-    private record StateEntry(long size, long mtime, String md5) {}
+    private record StateEntry(long size, long mtime, String algo, String hash) {}
 
     public interface Progress {
         void onFile(String path, int index, int total);
@@ -62,10 +66,16 @@ public class Patcher {
 
         JsonNode root = new ObjectMapper().readTree(res.body());
         List<FileEntry> out = new ArrayList<>();
-        for (JsonNode n : root.get("files"))
-            out.add(new FileEntry(n.get("path").asText(),
-                                  n.get("size").asLong(),
-                                  n.get("md5").asText()));
+        for (JsonNode n : root.get("files")) {
+            String path = n.get("path").asText();
+            checkSafePath(path);
+            // Prefer SHA-256. MD5 only proves a download wasn't damaged; it
+            // can't prove a file wasn't deliberately swapped.
+            if (n.hasNonNull("sha256"))
+                out.add(new FileEntry(path, n.get("size").asLong(), "SHA-256", n.get("sha256").asText()));
+            else
+                out.add(new FileEntry(path, n.get("size").asLong(), "MD5", n.get("md5").asText()));
+        }
         return out;
     }
 
@@ -102,16 +112,19 @@ public class Patcher {
             }
 
             StateEntry cached = state.get(e.path());
-            String localMd5;
-            if (cached != null && cached.size() == size && cached.mtime() == mtime) {
-                localMd5 = cached.md5();          // trusted, no disk read
+            String localHash;
+            if (cached != null && cached.size() == size && cached.mtime() == mtime
+                    && cached.algo().equals(e.algo())) {
+                localHash = cached.hash();        // trusted, no disk read
             } else {
-                localMd5 = md5(local);
-                state.put(e.path(), new StateEntry(size, mtime, localMd5));
+                // Also lands here once per file the first time the manifest
+                // switches from MD5 to SHA-256, since the cached hash is MD5.
+                localHash = hash(local, e.algo());
+                state.put(e.path(), new StateEntry(size, mtime, e.algo(), localHash));
                 stateChanged = true;
             }
 
-            if (!localMd5.equalsIgnoreCase(e.md5()))
+            if (!localHash.equalsIgnoreCase(e.hash()))
                 need.add(e);
         }
 
@@ -160,7 +173,7 @@ public class Patcher {
     /** Fetches one file to a .part, verifies its checksum, then renames it. */
     private void fetchOne(FileEntry e, AtomicLong done, long total, Progress p)
             throws Exception {
-        Path target = installDir.resolve(e.path());
+        Path target = resolveInside(installDir, e.path());
         Files.createDirectories(target.getParent());
         Path tmp = target.resolveSibling(target.getFileName() + ".part");
 
@@ -184,8 +197,8 @@ public class Patcher {
             }
         }
 
-        String got = md5(tmp);
-        if (!got.equalsIgnoreCase(e.md5())) {
+        String got = hash(tmp, e.algo());
+        if (!got.equalsIgnoreCase(e.hash())) {
             Files.deleteIfExists(tmp);
             throw new IllegalStateException("checksum mismatch on " + e.path());
         }
@@ -195,7 +208,7 @@ public class Patcher {
         BasicFileAttributes attr =
                 Files.readAttributes(target, BasicFileAttributes.class);
         state.put(e.path(), new StateEntry(attr.size(),
-                attr.lastModifiedTime().toMillis(), got));
+                attr.lastModifiedTime().toMillis(), e.algo(), got));
     }
 
     // ---- state file -------------------------------------------------------
@@ -208,10 +221,13 @@ public class Patcher {
             JsonNode root = new ObjectMapper().readTree(Files.readString(f));
             root.fields().forEachRemaining(en -> {
                 JsonNode v = en.getValue();
+                // Old state files only have "md5"; newer ones say which algorithm.
+                String algo = v.hasNonNull("algo") ? v.get("algo").asText() : "MD5";
+                String hash = v.hasNonNull("hash") ? v.get("hash").asText() : v.get("md5").asText();
                 state.put(en.getKey(), new StateEntry(
                         v.get("size").asLong(),
                         v.get("mtime").asLong(),
-                        v.get("md5").asText()));
+                        algo, hash));
             });
         } catch (Exception ignored) {
             state.clear();   // corrupt cache: fall back to hashing everything
@@ -227,7 +243,8 @@ public class Patcher {
                 ObjectNode n = root.putObject(en.getKey());
                 n.put("size", en.getValue().size());
                 n.put("mtime", en.getValue().mtime());
-                n.put("md5", en.getValue().md5());
+                n.put("algo", en.getValue().algo());
+                n.put("hash", en.getValue().hash());
             }
             Files.createDirectories(installDir);
             Files.writeString(installDir.resolve(STATE_FILE), om.writeValueAsString(root));
@@ -235,8 +252,41 @@ public class Patcher {
         }
     }
 
+    // ---- helpers ----------------------------------------------------------
+
+    /**
+     * Rejects manifest paths that could escape the install folder, e.g.
+     * "../../Windows/x.dll" or "C:/x". The manifest comes over the network,
+     * so it must never be able to write outside the game directory.
+     */
+    static void checkSafePath(String path) {
+        if (path == null || path.isEmpty()
+                || path.startsWith("/") || path.startsWith("\\")
+                || path.contains(":")
+                || path.contains("\u0000"))
+            throw new IllegalStateException("unsafe path in manifest: " + path);
+        for (String part : path.split("[/\\\\]"))
+            if (part.equals(".."))
+                throw new IllegalStateException("unsafe path in manifest: " + path);
+    }
+
+    /** Resolves a manifest path and double-checks it stays inside {@code root}. */
+    static Path resolveInside(Path root, String path) {
+        checkSafePath(path);
+        Path base = root.toAbsolutePath().normalize();
+        Path target = base.resolve(path).normalize();
+        if (!target.startsWith(base))
+            throw new IllegalStateException("unsafe path in manifest: " + path);
+        return target;
+    }
+
     public static String md5(Path file) throws Exception {
-        MessageDigest md = MessageDigest.getInstance("MD5");
+        return hash(file, "MD5");
+    }
+
+    /** Lower-case hex digest of a file. {@code algo} is "MD5" or "SHA-256". */
+    public static String hash(Path file, String algo) throws Exception {
+        MessageDigest md = MessageDigest.getInstance(algo);
         try (InputStream in = Files.newInputStream(file)) {
             byte[] buf = new byte[1048576];
             int r;
