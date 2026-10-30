@@ -33,6 +33,9 @@ public class LauncherApp extends Application {
     private final Label detail = new Label("");
     private final ProgressBar bar = new ProgressBar(0);
     private final Button action = new Button("Check for updates");
+    private final Label updateText = new Label();
+    private final Hyperlink updateLink = new Hyperlink("Download it");
+    private final HBox updateBanner = new HBox(8, updateText, updateLink);
 
     private List<Patcher.FileEntry> pending = null;
 
@@ -89,6 +92,20 @@ public class LauncherApp extends Application {
         StackPane.setMargin(brand, new Insets(26, 0, 0, 0));
         root.getChildren().add(brand);
 
+        // Shown only when the manifest announces a newer launcher than this one.
+        updateText.setStyle("-fx-text-fill: #ece5f5; -fx-font-size: 13px;");
+        updateLink.setStyle("-fx-text-fill: #c9b3ec; -fx-font-size: 13px; -fx-border-color: transparent;");
+        updateBanner.setAlignment(Pos.CENTER);
+        updateBanner.setPadding(new Insets(6, 14, 6, 14));
+        updateBanner.setMaxSize(Region.USE_PREF_SIZE, Region.USE_PREF_SIZE);
+        updateBanner.setStyle("-fx-background-color: rgba(74,61,92,0.92); -fx-background-radius: 3;"
+                            + "-fx-border-color: rgba(155,127,196,0.6); -fx-border-radius: 3;");
+        updateBanner.setVisible(false);
+        updateBanner.setManaged(false);
+        StackPane.setAlignment(updateBanner, Pos.TOP_CENTER);
+        StackPane.setMargin(updateBanner, new Insets(84, 0, 0, 0));
+        root.getChildren().add(updateBanner);
+
         VBox controls = new VBox(12, status, bar, detail, action);
         controls.setAlignment(Pos.BOTTOM_CENTER);
         controls.setPadding(new Insets(0, 0, 28, 0));
@@ -116,14 +133,20 @@ public class LauncherApp extends Application {
         detail.setText("");
         bar.setProgress(ProgressBar.INDETERMINATE_PROGRESS);
 
+        java.util.concurrent.atomic.AtomicReference<Patcher.LauncherInfo> info =
+                new java.util.concurrent.atomic.AtomicReference<>();
+
         Task<List<Patcher.FileEntry>> task = new Task<>() {
             protected List<Patcher.FileEntry> call() throws Exception {
                 Patcher p = new Patcher(config.serverUrl, config.installPath());
-                return p.findOutdated(p.fetchManifest());
+                List<Patcher.FileEntry> manifest = p.fetchManifest();
+                info.set(p.launcherInfo());
+                return p.findOutdated(manifest);
             }
         };
 
         task.setOnSucceeded(e -> {
+            showLauncherUpdate(info.get());
             pending = task.getValue();
             bar.setProgress(0);
             action.setDisable(false);
@@ -218,6 +241,19 @@ public class LauncherApp extends Application {
             status.setText("Could not start the game.");
             detail.setText(ex.getMessage());
         }
+    }
+
+    /** Shows the "new launcher available" banner if the server announces a newer version. */
+    private void showLauncherUpdate(Patcher.LauncherInfo li) {
+        boolean show = li != null && Version.isNewer(li.version(), Version.CURRENT);
+        if (show) {
+            String text = "A new launcher (v" + li.version() + ") is available.";
+            if (!li.notes().isBlank()) text += " " + li.notes();
+            updateText.setText(text);
+            updateLink.setOnAction(e -> getHostServices().showDocument(li.url()));
+        }
+        updateBanner.setVisible(show);
+        updateBanner.setManaged(show);
     }
 
     private void updateActionLabel() {

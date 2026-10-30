@@ -37,6 +37,12 @@ public class Patcher {
      */
     public record FileEntry(String path, long size, String algo, String hash) {}
 
+    /**
+     * Optional "launcher" block in the manifest, announcing the newest launcher.
+     * {@code url} is where players download it; {@code notes} is a short line shown with it.
+     */
+    public record LauncherInfo(String version, String url, String notes) {}
+
     /** What we last verified about a local file: its size, mtime and hash. */
     private record StateEntry(long size, long mtime, String algo, String hash) {}
 
@@ -49,6 +55,7 @@ public class Patcher {
     private final Path installDir;
     private final HttpClient http = HttpClient.newHttpClient();
     private final Map<String, StateEntry> state = new ConcurrentHashMap<>();
+    private volatile LauncherInfo launcherInfo;
 
     public Patcher(String baseUrl, Path installDir) {
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl : baseUrl + "/";
@@ -65,6 +72,7 @@ public class Patcher {
             throw new IllegalStateException("manifest fetch failed: HTTP " + res.statusCode());
 
         JsonNode root = new ObjectMapper().readTree(res.body());
+        launcherInfo = parseLauncherInfo(root);
         List<FileEntry> out = new ArrayList<>();
         for (JsonNode n : root.get("files")) {
             String path = n.get("path").asText();
@@ -250,6 +258,22 @@ public class Patcher {
             Files.writeString(installDir.resolve(STATE_FILE), om.writeValueAsString(root));
         } catch (Exception ignored) {
         }
+    }
+
+    /** The manifest's launcher announcement, or null if it has none. Set by fetchManifest. */
+    public LauncherInfo launcherInfo() {
+        return launcherInfo;
+    }
+
+    static LauncherInfo parseLauncherInfo(JsonNode root) {
+        if (root == null || !root.hasNonNull("launcher")) return null;
+        JsonNode l = root.get("launcher");
+        if (!l.hasNonNull("version") || !l.hasNonNull("url")) return null;
+        String url = l.get("url").asText();
+        // Only ever open a web page; never a file: or other scheme from the network.
+        if (!url.startsWith("https://") && !url.startsWith("http://")) return null;
+        String notes = l.hasNonNull("notes") ? l.get("notes").asText() : "";
+        return new LauncherInfo(l.get("version").asText(), url, notes);
     }
 
     // ---- helpers ----------------------------------------------------------
