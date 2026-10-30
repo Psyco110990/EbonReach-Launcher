@@ -3,7 +3,7 @@ package com.ebonreach.launcher;
 /** This launcher's version. Bump it (and pom.xml) for every release you send out. */
 public final class Version {
 
-    public static final String CURRENT = "0.2.0";
+    public static final String CURRENT = "0.3.0";
 
     private Version() {
     }
