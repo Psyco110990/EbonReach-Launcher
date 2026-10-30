@@ -36,6 +36,7 @@ public class LauncherApp extends Application {
     private final Label updateText = new Label();
     private final Hyperlink updateLink = new Hyperlink("Download it");
     private final HBox updateBanner = new HBox(8, updateText, updateLink);
+    private final CheckBox dxvkBox = new CheckBox("Modern graphics (DXVK)");
 
     private List<Patcher.FileEntry> pending = null;
 
@@ -106,7 +107,17 @@ public class LauncherApp extends Application {
         StackPane.setMargin(updateBanner, new Insets(84, 0, 0, 0));
         root.getChildren().add(updateBanner);
 
-        VBox controls = new VBox(12, status, bar, detail, action);
+        dxvkBox.setSelected(config.dxvk);
+        dxvkBox.setStyle("-fx-text-fill: #9d94ad; -fx-font-size: 12px;");
+        dxvkBox.setTooltip(new Tooltip("Runs the game through Vulkan: usually smoother and fewer glitches on modern\n"
+                + "graphics cards. Needs a Vulkan-capable GPU. Untick it if the game won't start."));
+        dxvkBox.setOnAction(e -> {
+            config.dxvk = dxvkBox.isSelected();
+            config.save();
+            applyDxvk();
+        });
+
+        VBox controls = new VBox(12, status, bar, detail, action, dxvkBox);
         controls.setAlignment(Pos.BOTTOM_CENTER);
         controls.setPadding(new Insets(0, 0, 28, 0));
         controls.setMaxHeight(Region.USE_PREF_SIZE);
@@ -148,6 +159,7 @@ public class LauncherApp extends Application {
         task.setOnSucceeded(e -> {
             showLauncherUpdate(info.get());
             pending = task.getValue();
+            if (pending.isEmpty()) applyDxvk();   // install is complete; make DXVK match the tickbox
             bar.setProgress(0);
             action.setDisable(false);
             if (pending.isEmpty()) {
@@ -212,6 +224,17 @@ public class LauncherApp extends Application {
         });
 
         new Thread(task, "download").start();
+    }
+
+    /** Puts DXVK in place or removes it, to match the tickbox. */
+    private void applyDxvk() {
+        try {
+            String msg = Dxvk.apply(config.installPath(), config.dxvk);
+            if (msg != null) detail.setText(msg);
+        } catch (Exception ex) {
+            detail.setText("Couldn't change graphics mode: " + ex.getMessage()
+                    + (running.get() > 0 ? " (close the game first)" : ""));
+        }
     }
 
     private void play(Stage stage) {

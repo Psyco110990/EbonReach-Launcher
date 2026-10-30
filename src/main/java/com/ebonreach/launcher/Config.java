@@ -9,6 +9,7 @@ public class Config {
 
     public String serverUrl  = "http://143.47.241.168:8080/";
     public String installDir = "client";
+    public boolean dxvk      = false;   // "Modern graphics" toggle
 
     public static Config load() {
         Config c = new Config();
@@ -18,6 +19,7 @@ public class Config {
                 p.load(in);
                 c.serverUrl  = p.getProperty("serverUrl", c.serverUrl);
                 c.installDir = p.getProperty("installDir", c.installDir);
+                c.dxvk       = Boolean.parseBoolean(p.getProperty("dxvk", "false"));
             } catch (IOException e) {
                 System.err.println("config read failed, using defaults: " + e.getMessage());
             }
@@ -29,6 +31,7 @@ public class Config {
         Properties p = new Properties();
         p.setProperty("serverUrl", serverUrl);
         p.setProperty("installDir", installDir);
+        p.setProperty("dxvk", Boolean.toString(dxvk));
         try (OutputStream out = Files.newOutputStream(FILE)) {
             p.store(out, "EbonReach Launcher");
         } catch (IOException e) {
