@@ -1,0 +1,80 @@
+# Builds the launcher on GitHub's Windows machines.
+#
+# Every push and pull request: compile and package, so a broken build shows
+# up as a red cross on the commit. The jar and the Windows app are attached
+# to the run as downloadable artifacts.
+#
+# Pushing a tag like v0.3.0 also creates a GitHub Release with:
+#   EbonReach-Launcher-<version>.jar       needs Java 21 installed
+#   EbonReach-Launcher-<version>-win.zip   unzip and run EbonReach.exe;
+#                                          includes its own Java, so players
+#                                          don't need to install anything
+#
+# To release:  bump Version.java + pom.xml, commit, then
+#   git tag v0.3.0 && git push origin v0.3.0
+
+name: Build launcher
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Package
+        run: mvn -B -ntp package
+
+      - name: Read version
+        id: ver
+        run: |
+          $v = mvn -B -q -ntp help:evaluate "-Dexpression=project.version" -DforceStdout
+          "version=$v" >> $env:GITHUB_OUTPUT
+          if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "v$v") {
+            throw "Tag ${{ github.ref_name }} doesn't match pom.xml version $v"
+          }
+          if (-not (Select-String -Path src/main/java/com/ebonreach/launcher/Version.java -Pattern "`"$v`"" -Quiet)) {
+            throw "Version.java doesn't say $v; bump it to match pom.xml"
+          }
+
+      - name: Build Windows app (bundled Java)
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          New-Item -ItemType Directory -Force dist, jpinput | Out-Null
+          Copy-Item "target/ebonreach-launcher-$v.jar" "jpinput/"
+          jpackage --type app-image --name EbonReach --app-version $v `
+            --input jpinput --main-jar "ebonreach-launcher-$v.jar" `
+            --main-class com.ebonreach.launcher.Main --dest jpout
+          Compress-Archive -Path jpout/EbonReach -DestinationPath "dist/EbonReach-Launcher-$v-win.zip"
+          Copy-Item "target/ebonreach-launcher-$v.jar" "dist/EbonReach-Launcher-$v.jar"
+          Get-FileHash dist/* -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } | Set-Content dist/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launcher-${{ steps.ver.outputs.version }}
+          path: dist/*
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
