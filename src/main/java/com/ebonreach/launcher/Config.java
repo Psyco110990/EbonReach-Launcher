@@ -10,6 +10,7 @@ public class Config {
     public String serverUrl  = "http://143.47.241.168:8080/";
     public String installDir = "client";
     public boolean dxvk      = false;   // "Modern graphics" toggle
+    public boolean hdTextures = false;  // optional HD texture pack (3.2)
 
     public static Config load() {
         Config c = new Config();
@@ -20,6 +21,7 @@ public class Config {
                 c.serverUrl  = p.getProperty("serverUrl", c.serverUrl);
                 c.installDir = p.getProperty("installDir", c.installDir);
                 c.dxvk       = Boolean.parseBoolean(p.getProperty("dxvk", "false"));
+                c.hdTextures = Boolean.parseBoolean(p.getProperty("hdTextures", "false"));
             } catch (IOException e) {
                 System.err.println("config read failed, using defaults: " + e.getMessage());
             }
@@ -32,6 +34,7 @@ public class Config {
         p.setProperty("serverUrl", serverUrl);
         p.setProperty("installDir", installDir);
         p.setProperty("dxvk", Boolean.toString(dxvk));
+        p.setProperty("hdTextures", Boolean.toString(hdTextures));
         try (OutputStream out = Files.newOutputStream(FILE)) {
             p.store(out, "EbonReach Launcher");
         } catch (IOException e) {
