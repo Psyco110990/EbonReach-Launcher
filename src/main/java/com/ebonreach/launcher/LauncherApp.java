@@ -37,6 +37,7 @@ public class LauncherApp extends Application {
     private final Hyperlink updateLink = new Hyperlink("Download it");
     private final HBox updateBanner = new HBox(8, updateText, updateLink);
     private final CheckBox dxvkBox = new CheckBox("Modern graphics (DXVK)");
+    private final CheckBox hdBox = new CheckBox("HD textures (large download)");
 
     private List<Patcher.FileEntry> pending = null;
 
@@ -117,7 +118,24 @@ public class LauncherApp extends Application {
             applyDxvk();
         });
 
-        VBox controls = new VBox(12, status, bar, detail, action, dxvkBox);
+        hdBox.setSelected(config.hdTextures);
+        hdBox.setStyle("-fx-text-fill: #9d94ad; -fx-font-size: 12px;");
+        hdBox.setTooltip(new Tooltip("Higher-resolution textures for the whole world. Only downloaded if you tick this;\n"
+                + "untick it to go back to the original textures without downloading them again."));
+        hdBox.setVisible(false);   // shown once the patch server says it offers the pack
+        hdBox.setManaged(false);
+        hdBox.setOnAction(e -> {
+            if (running.get() > 0) {
+                hdBox.setSelected(config.hdTextures);
+                detail.setText("Close the game before changing textures.");
+                return;
+            }
+            config.hdTextures = hdBox.isSelected();
+            config.save();
+            checkForUpdates();     // swaps the files and lists any download needed
+        });
+
+        VBox controls = new VBox(12, status, bar, detail, action, dxvkBox, hdBox);
         controls.setAlignment(Pos.BOTTOM_CENTER);
         controls.setPadding(new Insets(0, 0, 28, 0));
         controls.setMaxHeight(Region.USE_PREF_SIZE);
@@ -146,25 +164,40 @@ public class LauncherApp extends Application {
 
         java.util.concurrent.atomic.AtomicReference<Patcher.LauncherInfo> info =
                 new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<String> packNote =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicBoolean hdOffered = new java.util.concurrent.atomic.AtomicBoolean();
 
         Task<List<Patcher.FileEntry>> task = new Task<>() {
             protected List<Patcher.FileEntry> call() throws Exception {
                 Patcher p = new Patcher(config.serverUrl, config.installPath());
                 List<Patcher.FileEntry> manifest = p.fetchManifest();
                 info.set(p.launcherInfo());
-                return p.findOutdated(manifest);
+
+                // HD textures (3.2): swap files to match the tickbox before
+                // checking, then check the manifest as the tickbox sees it.
+                OptionalPack hd = OptionalPack.HD_TEXTURES;
+                hdOffered.set(hd.offered(manifest));
+                try {
+                    packNote.set(hd.apply(config.installPath(), manifest, config.hdTextures));
+                } catch (Exception ex) {
+                    packNote.set("Couldn't switch textures: " + ex.getMessage());
+                }
+                return p.findOutdated(hd.filter(manifest, config.hdTextures));
             }
         };
 
         task.setOnSucceeded(e -> {
             showLauncherUpdate(info.get());
+            hdBox.setVisible(hdOffered.get());
+            hdBox.setManaged(hdOffered.get());
             pending = task.getValue();
             if (pending.isEmpty()) applyDxvk();   // install is complete; make DXVK match the tickbox
             bar.setProgress(0);
             action.setDisable(false);
             if (pending.isEmpty()) {
                 status.setText("Up to date.");
-                detail.setText(config.installPath().toString());
+                detail.setText(packNote.get() != null ? packNote.get() : config.installPath().toString());
                 bar.setProgress(1);
                 updateActionLabel();
             } else {
